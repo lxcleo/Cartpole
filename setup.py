@@ -6,17 +6,20 @@ import torch
 import torch.nn.functional as F
 import torchvision.transforms as T
 from PIL import Image
+from collections import namedtuple
 import matplotlib
 import matplotlib.pyplot as plt
 
 is_ipython = 'inline' in matplotlib.get_backend()
 if is_ipython: from IPython import display
-
-resize = T.compose([T.ToPILImage(), T.resize(40, interpolation=Image.CUBIC), T.ToTensor()])
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+Transition = namedtuple('Transition',('state', 'action', 'next_state', 'reward'))
+resize = T.Compose([T.ToPILImage(), T.Resize(40, interpolation=Image.CUBIC), T.ToTensor()])
 class EnvManager():
 	def __init__(self, device):
 		self.env = gym.make('CartPole-v0').unwrapped
 		self.device = device
+		self.done = False
 
 
 
@@ -53,14 +56,71 @@ class EnvManager():
 		return resize(screen).unsqueeze(0).to(self.device)
 
 
+	def num_action(self):
+		return self.env.action_space.n
+
+
+
+
+	def take_action(self, action):
+		_, reward, self.done, _ = self.env.step(action.item())
+		return torch.tensor([reward], device = self.device)
+
+
 	def reset(self):
 		self.env.reset()
 
 
+	def close(self):
+		self.env.close()
+
+
+
+class Epsilon():
+	def __init__(self,start,end,decay):
+		self.start = start
+		self.end = end
+		self.decay = decay
+
+	def get_EpsiolonRate(self,step):
+		rate = self.end + (self.start-self.end) * \
+		math.exp(-1. * step * self.decay)
+		return rate
 
 
 
 
+class ActionSelection():
+	def __init__(self,strategy,num_actions, device):
+		self.current_step = 0
+		self.strategy = strategy
+		self.num_actions = num_actions
+		self.device = device
+	def selection(self,state,policy_net):
+		rate = self.strategy.get_EpsiolonRate(self.current_step)
+		self.current_step += 1
+
+		if rate > random.random():
+			action = random.randrange(self.num_actions) 
+			return torch.tensor([action]).to(self.device)# explore
+
+		else:
+			# Do not track on the gradient 
+			with torch.no_grad():
+				return policy_net(state).max(1)[1].view(1,1).to(self.device) # exploit
 
 
-	
+
+
+def plot(values, moving_avg_period):
+	plt.figure(2)
+	plt.clf()
+	plt.title('Training..')
+	plt.xlabel('# of Episode')
+	plt.ylabel('Duration')
+	plt.plot(values)
+	plt.plot(get_moving_average(moving_avg_period, values))
+	plt.pause(0.001)
+	if is_ipython: display.clear_output(wait=True)
+
+
